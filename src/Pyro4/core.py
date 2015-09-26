@@ -1147,10 +1147,19 @@ class Daemon(object):
                     else:
                         method = util.getAttribute(obj, method)
                         if request_flags & Pyro4.message.FLAGS_ONEWAY and Pyro4.config.ONEWAY_THREADED:
+
+                            # transfer this thread's current_context
+                            # into the child thread (I don't know if
+                            # this creates potential race conditions)
+                            _vargs = tuple([method, current_context.to_global()] + \
+                                           list(vargs))
                             # oneway call to be run inside its own thread
-                            thread = threadutil.Thread(target=method, args=vargs, kwargs=kwargs)
+                            thread = threadutil.Thread(target=_invoke_oneway_method,
+                                                       args=_vargs,
+                                                       kwargs=kwargs)
                             thread.setDaemon(True)
                             thread.start()   # this is the actual method call to the Pyro object (in its own thread)
+
                         else:
                             isCallback = getattr(method, "_pyroCallback", False)
                             data = method(*vargs, **kwargs)  # this is the actual method call to the Pyro object
@@ -1441,7 +1450,16 @@ class _CallContext(threading.local):
         self.serializer_id = 0
         self.annotations = {}
         self.correlation_id = None
+    def to_global(self):
+        return dict((key, self.__dict__[key]) for key in self.__dict__)
 
+def _invoke_oneway_method(method, parent_context, *args, **kwargs):
+    current_context.client = parent_context['client']
+    current_context.seq = parent_context['seq']
+    current_context.annotations = parent_context['annotations']
+    current_context.msg_flags = parent_context['msg_flags']
+    current_context.serializer_id = parent_context['serializer_id']
+    method(*args, **kwargs)
 
 current_context = _CallContext()
 """the context object for the current call. (thread-local)"""
